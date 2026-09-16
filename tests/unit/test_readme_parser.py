@@ -17,7 +17,7 @@ class TestReadmeParser:
 
     @pytest.mark.xfail(
         strict=True,
-        reason="issue #70 (manifest H-03): README parser returns no sections for a standard README",
+        reason="issue #70 (manifest H-03): README parser fixture is indented, so it has no headings",
     )
     def test_parse_standard_readme(self, parser, sample_readme_text):
         """Test parsing a standard README."""
@@ -133,7 +133,7 @@ class TestReadmeParser:
 
     @pytest.mark.xfail(
         strict=True,
-        reason="issue #71 (manifest H-04): README parser extracts no heading hierarchy",
+        reason="issue #71 (manifest H-04): heading hierarchy fixture is indented, so it has no headings",
     )
     def test_extract_heading_hierarchy(self, parser):
         """Test heading hierarchy extraction."""

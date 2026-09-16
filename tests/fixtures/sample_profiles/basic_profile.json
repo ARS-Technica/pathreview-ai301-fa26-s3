@@ -1,0 +1,38 @@
+{
+  "github_username": "priya-raman",
+  "portfolio_url": "https://priya-raman.dev",
+  "resume_filename": "mid_career.md",
+  "repos": [
+    {
+      "name": "transit-delay-tracker",
+      "description": "Predicts bus arrival delays from live GTFS feeds",
+      "primary_language": "Python",
+      "star_count": 34,
+      "fork_count": 6,
+      "open_issues_count": 3,
+      "last_commit_date": "2026-07-28T16:04:11Z",
+      "has_readme": true,
+      "topics": [
+        "gtfs",
+        "forecasting",
+        "fastapi"
+      ],
+      "homepage": "https://transit-delays.priya-raman.dev"
+    },
+    {
+      "name": "recipe-scaler",
+      "description": "React app that rescales recipe quantities and converts units",
+      "primary_language": "TypeScript",
+      "star_count": 11,
+      "fork_count": 2,
+      "open_issues_count": 1,
+      "last_commit_date": "2026-05-02T09:21:40Z",
+      "has_readme": true,
+      "topics": [
+        "react",
+        "vite"
+      ],
+      "homepage": ""
+    }
+  ]
+}
