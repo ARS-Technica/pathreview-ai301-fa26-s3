@@ -2,7 +2,7 @@
   {
     "id": "A-06",
     "title": "Duplicate embeddings generated when re-ingesting the same repository",
-    "body": "The `pipeline.py` doesn't check whether a repo has already been ingested before processing it. Re-uploading the same GitHub repo generates duplicate vector entries, causing retrieval to return identical chunks with inflated scores.",
+    "body": "`_check_skip()` in `ingestion/pipeline.py` passes the string `\"IngestedSource\"` to `db_session.query()` instead of the model class from `core/models/ingested_source.py`. The query fails, a broad `except Exception` catches it, and the source isn't skipped. It's chunked and embedded again.",
     "labels": [
       "tier-2",
       "ingestion",
@@ -74,7 +74,7 @@
   {
     "id": "A-18",
     "title": "Add end-to-end ingestion test with a sample resume fixture",
-    "body": "`ingestion/pipeline.py` has no test coverage. `ResumeParser`, `ReadmeParser`, and `BatchEmbeddingProcessor` have unit tests under `tests/unit/`, but no test runs `IngestionPipeline.ingest_resume` through parsing, chunking, and embedding storage, and `tests/integration/` holds only an empty `__init__.py`. Add an integration test that builds an `IngestionPipeline` with stub objects for `vector_db`, `db_session`, and `embedding_provider`, loads a resume from `tests/fixtures/sample_resumes/`, passes it to `ingest_resume`, and asserts on the `chunk_count` of the returned `IngestResult`.",
+    "body": "The resume parser and the batch embedding processor have unit tests, but `IngestionPipeline.ingest_resume` isn't covered by any test. Add an integration test that runs a fixture from `tests/fixtures/sample_resumes/` through parsing, chunking, and embedding storage, then asserts on the returned `chunk_count`.",
     "labels": [
       "tier-2",
       "tests",
@@ -90,8 +90,8 @@
   },
   {
     "id": "B-04",
-    "title": "Hybrid retriever over-weights keyword results when query contains technology names",
-    "body": "`HybridRetriever.retrieve` blends vector and keyword scores with a default weighting of 0.7 for vector and 0.3 for keyword, and nothing else in the repo sets different weights.\n\n`retrieve` fetches the collection's chunks with `_get_all_chunks` and then discards the result instead of passing it to `keyword_searcher.index()`, so the BM25 index is never built from the profile's own chunks. `KeywordSearcher.search` returns an empty list until `index` has run, so the keyword half of the blend adds nothing.\n\nThe score normalization is the second problem. `retrieve` divides the scores on each side by the highest score in that side's own batch of results, so the best BM25 hit always becomes 1.0 no matter how low its raw score is. Once the chunks are indexed, a chunk that is the best keyword match only because it repeats a technology name such as \"React\" or \"Python\" takes the full 0.3 keyword contribution, which is exactly the default `min_score` of 0.3, and `retrieve` keeps any result at or above that threshold even when its vector score is 0.\n\nPass the fetched chunks to `keyword_searcher.index()`, and normalize keyword scores against a fixed scale rather than the batch maximum, so a weak keyword match does not pass the `min_score` filter on its own.",
+    "title": "Hybrid retriever skips keyword indexing and normalizes BM25 scores per batch",
+    "body": "`HybridRetriever.retrieve` fetches the collection's chunks but doesn't pass them to `keyword_searcher.index()`, so the keyword half of the blend contributes nothing. Each side is normalized by its own batch's top score, so the best keyword match would scale to 1.0 even when it's weak.",
     "labels": [
       "tier-2",
       "rag",
@@ -122,7 +122,7 @@
   {
     "id": "B-08",
     "title": "Review generator never combines feedback across a user's projects",
-    "body": "The review generator never combines observations across a user's projects. `ReviewGenerator._consolidate_feedback` is the only step meant to do that, and it merges nothing: it keeps the first section for each `section_name` and drops any later section whose `section_name` it has already seen. When parsing succeeds, `generate_section` returns the first section from the parsed model output, so the `section_name` it carries comes from that output and not from the requested section name. Nothing else in `rag/generator/` combines feedback.\n\nThere is also no per-project detail for the model to work with. `generate_full_review` calls `generate_section` once for each of five fixed section names (`skills_feedback`, `projects_feedback`, `presentation_feedback`, `gaps_feedback`, `first_impression`), so the number of sections does not depend on the number of projects. `generate_section` fills its template with three values: the formatted context, `github_username`, and `project_count`, which is `len(profile_data.get(\"projects\", []))`. All five templates in `rag/generator/prompt_templates.py` use those same three placeholders, so nothing else from `profile_data`, including the project entries themselves, reaches the model.\n\nPass per-project detail into the prompts, and give `_consolidate_feedback` a real implementation that merges repeated observations into a single statement covering the projects it applies to.",
+    "body": "`_consolidate_feedback` doesn't merge anything: it keeps the first section for each `section_name` and drops the rest instead of combining repeated observations. The prompts carry only context, username and project count, so per-project detail needs to reach the model too.",
     "labels": [
       "tier-3",
       "rag"
@@ -204,7 +204,7 @@
   {
     "id": "B-18",
     "title": "Add an integration test that runs the full RAG pipeline against a mock LLM",
-    "body": "The RAG components have unit tests (`tests/unit/test_keyword_search.py`, `tests/unit/test_relevance_scorer.py`, `tests/unit/test_output_parser.py`), but `tests/integration/` holds only an empty `__init__.py`, so no test runs a full query through retrieval → generation → parsing. Add one that indexes a small set of chunks, calls `HybridRetriever.retrieve` with a query embedding from `MockEmbeddingProvider`, passes the chunks it returns to `ReviewGenerator.generate_full_review`, and asserts on the returned `FeedbackSection` objects, which `generate_section` builds by passing the model output through `parse_review_output`. `ReviewGenerator.__init__` builds its own `openai.OpenAI` client and the repo has no fake generation client, so the test has to supply a client of its own that returns a fixed response. Mark the test `@pytest.mark.integration` so `make test-integration` runs it, and build the profile argument from the fixture in `tests/fixtures/sample_profiles/`.",
+    "body": "`tests/integration/` holds only an empty `__init__.py`, so no test runs a query through retrieval, generation and parsing. Add one marked `@pytest.mark.integration`. `ReviewGenerator` builds its own OpenAI client, so the test needs a way to pass in a fixed response.",
     "labels": [
       "tier-2",
       "tests",
@@ -223,7 +223,7 @@
   {
     "id": "B-20",
     "title": "Implement an offline eval runner that measures review quality across a benchmark portfolio set",
-    "body": "`scripts/run_evals.py` is a stub: `main()` prints two lines and returns (`scripts/run_evals.py:4-12`). The scoring code it needs already exists — `EvalSuite.run(query, chunks, feedback)` in `rag/evaluator/eval_suite.py:30` returns an `EvalResult` with `relevance_score`, `faithfulness_score` and `overall_score` — but nothing in the repo calls `EvalSuite`, so review quality is never measured. The rest of the setup is already in place: `make eval` runs `scripts/run_evals.py` (`Makefile:77-78`), and the RAG Evaluation workflow runs `python scripts/run_evals.py` (`.github/workflows/eval.yml:21`) and then reads `eval_results.json` to report the scores (`.github/workflows/eval.yml:32`). When the workflow cannot comment on the pull request, it writes the scores into the job summary instead (`.github/workflows/eval.yml:38-48`).\n\nImplement the runner so it loads the benchmark profiles from `tests/fixtures/sample_profiles/`, runs each one through retrieval and generation, scores the result with `EvalSuite`, and writes `eval_results.json` with per-profile scores and an overall score for the whole set. The workflow runs it with `LLM_PROVIDER: mock` set (`.github/workflows/eval.yml:23`), so the runner must finish without a real API key: use `MockEmbeddingProvider` from `ingestion/embeddings/provider.py` for embeddings and a fake client for the generator.",
+    "body": "`scripts/run_evals.py` prints two lines and returns, and no code calls `EvalSuite`, so review quality isn't measured. `make eval` runs the script, and the RAG Evaluation workflow runs it and reads `eval_results.json`. Implement it to score the benchmark profiles and write that file.",
     "labels": [
       "tier-3",
       "rag",
@@ -242,7 +242,7 @@
   {
     "id": "C-03",
     "title": "Agent session state is not cleared between reviews for the same user",
-    "body": "`SessionStore` keys agent state on the `session_id` it is passed, and `Orchestrator.run` passes the profile id as that id. Nothing reads the state it loads to decide what to skip: the state is only merged with the new results and written back, and `SessionStore.delete` is never called, so entries from earlier reviews stay until the one hour expiry that `SessionStore.set` applies.\n\nThe results a second review reuses come from the in-memory cache in `ContextManager`. Each `Orchestrator` holds one `ContextManager`, `_execute_tool` returns the stored result whenever a tool name and the hash of its input repeat, and `ContextManager` has no method that removes entries, so one `Orchestrator` serving two reviews returns the first run's result for every tool whose input is unchanged.\n\nClear the `ContextManager` cache at the start of `Orchestrator.run`, and delete the profile's stored state with `SessionStore.delete` before the plan runs, so a review that follows a portfolio update runs the tools again.",
+    "body": "`Orchestrator` keeps one `ContextManager` and never empties it, so one orchestrator handling two reviews returns the first run's result for every tool whose input hasn't changed. Empty that cache and delete the profile's saved session state when `run` starts.",
     "labels": [
       "tier-1",
       "good first issue",
@@ -289,8 +289,8 @@
   },
   {
     "id": "C-10",
-    "title": "Add a `has_tests` boolean to the repo analysis output",
-    "body": "`RepoAnalyzer` in `ingestion/parsers/repo_analyzer.py` already detects tests. `_detect_tests()` looks for `tests/`, `test/`, `pytest.ini`, `test_`, `__tests__`, and `spec/`, and its result becomes the `has_tests` key in the parser metadata and the `Has Tests:` line in the summary text. The problem is the input. `_detect_tests()` reads those names from `repo_data.get(\"file_structure\", \"\")`, and no code in this repository ever sets `file_structure`, so `has_tests` is always `False`. `_detect_ci()` and `_detect_tech_stack()` read the same key, so `has_ci` is always `False` and `tech_stack` holds at most the primary language.\n\n`RepoAnalyzer.parse()` expects the raw GitHub API response for a repository: it reads `stargazers_count`, `forks_count`, `pushed_at`, `language`, `readme_content`, and `html_url`. `GitHubTool._fetch_repo_metadata()` in `agent/tools/github_tool.py` fetches that API response, but it returns its own dict with different names — `star_count`, `fork_count`, `last_commit_date`, `primary_language`, `has_readme`, plus `name`, `description`, `open_issues_count`, `topics`, and `homepage` — and it has no file list. Nothing in the repository passes one of these dicts to the other. `RepoAnalyzer.parse()` is called only from `ingest_repo_metadata()` in `ingestion/pipeline.py`, which receives `repo_data` from its caller.\n\nThe work is to give the detectors a file list. Two pieces are needed: add a method to `GitHubTool` that lists the files in the repository, and make the dict that reaches `RepoAnalyzer.parse()` carry that list under a `file_structure` key. `_has_readme()` in `agent/tools/github_tool.py` already makes a second GitHub API request, so use the same pattern for the new request. The three detectors wrap the value in `str()`, so a list of paths works.",
+    "title": "Repo analyzer never receives a file list, so `has_tests` and `has_ci` are always `False`",
+    "body": "`_detect_tests()` and `_detect_ci()` in `ingestion/parsers/repo_analyzer.py` read file names from `repo_data.get(\"file_structure\", \"\")`, but no code sets that key, so `has_tests` and `has_ci` are always `False`. `GitHubTool` doesn't fetch a file list, and the analyzer needs one under `file_structure`.",
     "labels": [
       "tier-1",
       "good first issue",
@@ -357,7 +357,7 @@
   {
     "id": "C-17",
     "title": "Add a mock GitHub API server for integration tests",
-    "body": "`tests/integration/` holds only an `__init__.py`, and no test in the repository exercises `GitHubTool`. The `test-integration` job in `.github/workflows/ci.yml` runs `pytest tests/integration` and treats pytest's \"no tests collected\" exit code as success, so the tool's request building and its error handling are not checked anywhere.\n\nAdd integration tests that run `GitHubTool` against a local mock server instead of the live GitHub API. `pytest-httpserver` is already in the `dev` dependency group in `pyproject.toml`, and `GitHubTool` sets `self.base_url` in `__init__()` and builds every request URL from it, so a test can point the tool at the mock server's address. Cover a successful metadata fetch plus the 404 and 403 responses that `execute()` turns into \"Repository not found\" and \"Rate limited or access denied\". Keep the JSON response bodies as fixture files in `tests/fixtures/github_responses/`. Once the directory collects at least one test, remove the exit code shim from the `test-integration` job, as the comment there asks.",
+    "body": "`tests/integration/` holds only an `__init__.py`, and no test exercises `GitHubTool`. Add tests that point the tool's `base_url` at a local `pytest-httpserver` and cover the 404 and 403 responses, so the `test-integration` CI job can stop treating an empty suite as a pass.",
     "labels": [
       "tier-2",
       "tests",
@@ -424,7 +424,7 @@
   {
     "id": "D-08",
     "title": "Add a safety event count to the health check endpoint",
-    "body": "The `/health` endpoint in `api/routes/health.py` returns a `safety_events_last_hour` key whose value is the literal `0`. It is set to `0` where `health_status` is built and assigned `0` again after the dependency checks, and the route never reads the safety layer, so the number never changes.\n\n`SafetyMonitor` in `safety/monitoring.py` records events with `log_event()`, which increments one Redis key per event type, and reads them back with `get_event_count()`. Create a `SafetyMonitor` with a Redis client in the route and fill the field from the counts for the five types in `SafetyMonitor.VALID_EVENT_TYPES`. If the counts cannot be read, keep the current behavior: log the error and leave the field at `0` rather than failing the health check. `get_event_count()` ignores its `window_hours` argument and returns the raw Redis counter, which `log_event()` gives a 24 hour expiry, so the field reports that counter total rather than a strict one hour window.",
+    "body": "The `/health` endpoint in `api/routes/health.py` reports `safety_events_last_hour` as the literal `0` and never reads the safety layer, so the field doesn't reflect any recorded event. `SafetyMonitor.get_event_count()` in `safety/monitoring.py` can supply per-type counts to fill it.",
     "labels": [
       "tier-1",
       "good first issue",
@@ -458,7 +458,7 @@
   {
     "id": "D-10",
     "title": "Add rate limiting per IP address in addition to per user",
-    "body": "`RateLimiter.check_rate_limit` in `safety/rate_limiter.py` takes any identifier string — its docstring names a user ID or an IP address, and `tests/unit/test_rate_limiter.py` covers a user ID, an IP address, and an API key. Nothing in `api/` calls it. `api/main.py` adds only `CORSMiddleware` and `RequestIDMiddleware`, and no route or dependency builds a `RateLimiter`, so no request is limited today, authenticated or not.\n\nAdd middleware in `api/middleware/`, registered in `api/main.py`, that calls the limiter on every request: once with the client IP address as the identifier, and once with the user ID when the request carries a token that `decode_access_token` in `core/security.py` accepts. Build the Redis client from `redis_url` in `core/config.py`, read the limit from `rate_limit_per_minute` in the same file, and return `429 Too Many Requests` when a check fails. `api/middleware/request_id.py` shows the middleware pattern this app uses.",
+    "body": "`RateLimiter.check_rate_limit` in `safety/rate_limiter.py` accepts any identifier, but no code in `api/` calls it, so requests aren't rate limited, signed in or not. Add middleware registered in `api/main.py` that checks each request by client IP, and by user ID when a token is present.",
     "labels": [
       "tier-2",
       "safety",
@@ -525,7 +525,7 @@
   {
     "id": "E-05",
     "title": "`DELETE /profiles/{profile_id}` leaves the profile's embeddings in the vector store",
-    "body": "`DELETE /profiles/{profile_id}` in `api/routes/profiles.py` calls `delete_profile` in `core/services/profile_service.py`. That function deletes the profile's `Review` rows and `IngestedSource` rows, then the profile, and commits once, rolling back if anything fails. The models declare the same cascade: `core/models/profile.py` sets `cascade=\"all, delete-orphan\"` on the `reviews` and `ingested_sources` relationships, and `core/models/review.py` and `core/models/ingested_source.py` both set `ondelete=\"CASCADE\"` on `profile_id`. No database rows are left behind.\n\nThe vector store is not cleaned up. `ingestion/pipeline.py` puts `profile_id` and a `source_id` such as `resume_{profile_id}_{hash}` into the metadata of every chunk it stores in ChromaDB, and `VectorStore.delete_by_source_id` in `rag/retriever/vector_store.py` has no callers, so the chunks for a deleted profile stay in the store and retrieval can still return them.\n\nDelete a profile's chunks from the vector store as part of `delete_profile`. `delete_by_source_id` shows the pattern to follow: select the chunks by metadata, then delete the IDs it returns. Nothing outside `rag/retriever/` holds a `VectorStore` today, so the service needs one passed in, and the route that calls the service has to supply it.",
+    "body": "`delete_profile` in `core/services/profile_service.py` removes the profile's database rows but leaves its chunks in the vector store, so retrieval can still return them. `ingestion/pipeline.py` stores the `profile_id` with every chunk. Clearing those chunks should be part of the deletion.",
     "labels": [
       "tier-2",
       "api",
@@ -559,7 +559,7 @@
   {
     "id": "E-11",
     "title": "Add an API rate limiting header (`X-RateLimit-Remaining`) to responses",
-    "body": "`RateLimiter.check_rate_limit` in `safety/rate_limiter.py` returns an allow or deny result plus the number of requests left in the current window, but nothing in `api/` calls it: `api/main.py` registers only `CORSMiddleware` and `RequestIDMiddleware`. The API never counts a request, never returns `429`, and sends no `X-RateLimit-Limit` or `X-RateLimit-Remaining` header.\n\nAdd a middleware in `api/middleware/` and register it in `api/main.py`. It should call `check_rate_limit` once per request, using a Redis client built from `redis_url` in `core/config.py` and `rate_limit_per_minute` from the same file as the limit. Set `X-RateLimit-Limit` and `X-RateLimit-Remaining` on the response from that limit and the returned count, and return `429` when the call denies the request. `api/middleware/request_id.py` shows the pattern: it sets `X-Request-ID` on the response inside its `dispatch` method.",
+    "body": "`safety/rate_limiter.py` defines `check_rate_limit`, but no code in `api/` calls it, so responses don't carry an `X-RateLimit-Limit` or `X-RateLimit-Remaining` header and the API never returns `429`. Add middleware that calls it and sets both headers.",
     "labels": [
       "tier-2",
       "api",
@@ -610,7 +610,7 @@
   {
     "id": "E-14",
     "title": "API reference doc is missing the `POST /profiles` request body schema",
-    "body": "`docs/API.md` lists endpoints one per line with a short description and documents no request bodies. Add the request body for `POST /profiles` and `POST /reviews`, with a description and an example value for every field.\n\n`POST /profiles` takes multipart form data rather than JSON: `create_profile_endpoint` in `api/routes/profiles.py` declares `github_username` and `portfolio_url` as `Form` fields and `resume_file` as a `File` upload. `POST /reviews` takes a JSON body validated by `ReviewCreate` in `api/schemas/review.py`, which has one field, `profile_id`.",
+    "body": "`docs/API.md` lists endpoints with a short description but doesn't give any request bodies. Add them for `POST /profiles` and `POST /reviews`, with a description and an example value for each field. `POST /profiles` takes multipart form data, not JSON.",
     "labels": [
       "tier-1",
       "good first issue",
@@ -629,7 +629,7 @@
   {
     "id": "E-15",
     "title": "Add integration tests for authentication edge cases",
-    "body": "`api/middleware/auth.py` has no test coverage. `tests/integration/` holds only an empty `__init__.py`, and `tests/conftest.py` defines only the `sample_resume_text` and `sample_readme_text` fixtures, so no test sends a request to the API. `tests/unit/test_security.py` covers `decode_access_token` with an invalid token, a malformed token, and a token with a changed payload, but `get_current_user` is never called.\n\nAdd `tests/integration/test_auth_middleware.py` with tests that call a protected endpoint such as `GET /reviews` and check the response for an expired token, a malformed token, a missing `Authorization` header, and a token signed with a different secret. This needs a client fixture built on the `app` in `api/main.py`; `httpx` is already a project dependency. None of the four cases reaches the user lookup in `get_current_user`, so the tests do not need a user row in the database. Mark the tests with the `integration` marker declared in `pyproject.toml`.",
+    "body": "`api/middleware/auth.py` has no test coverage, and `tests/integration/` holds only an empty `__init__.py`. Add tests that call a protected endpoint with an expired token, a malformed token, no `Authorization` header, and a token signed with a different secret.",
     "labels": [
       "tier-2",
       "tests",
@@ -647,7 +647,7 @@
   {
     "id": "F-07",
     "title": "Review progress indicator doesn't update in real time during long-running reviews",
-    "body": "While a review runs, `frontend/src/pages/ReviewPage.tsx` renders a fixed spinner with the text \"Analyzing your portfolio...\", so a long review gives no sign of how far along it is and looks like the app has stopped responding. `frontend/src/hooks/useReviewStatus.ts` polls `GET /reviews/{id}/status` every 3 seconds through `apiClient.getReviewStatus`, and `get_review_status` in `api/routes/reviews.py` returns a `progress_pct` field.\n\nReplace the spinner with a progress bar driven by that field. `progress_pct` is always 0 today: `core/models/review.py` has no `progress_pct` column, the route reads it with `getattr(review, \"progress_pct\", 0)`, and the `Review` type in `frontend/src/types/index.ts` has no such field. The work covers recording progress on the review while `process_review` runs, carrying the field through to the client, and rendering it.",
+    "body": "The review page shows a fixed spinner, so a long review looks like the app has stopped responding. The status endpoint reports `progress_pct`, but `Review` has no such column, so it's always 0. Show a real progress bar.",
     "labels": [
       "tier-3",
       "frontend",
@@ -773,8 +773,8 @@
   },
   {
     "id": "G-14",
-    "title": "Add inline docstrings to all public methods in `core/services/`",
-    "body": "Every public function in `core/services/` already has a docstring, but none of them has the `Args:`, `Returns:` or `Raises:` sections that Google style asks for. Add the sections that apply to each of the eight public functions, and keep the text each docstring already has.\n\n`core/services/profile_service.py` defines `create_profile`, `get_profile`, `update_profile` and `delete_profile`. `core/services/review_service.py` defines `create_review`, `get_review`, `list_reviews` and `process_review`. Only two of the eight catch errors, and they behave differently, so the docstrings should describe what the code really does: `delete_profile` rolls back the transaction and re-raises when the cascade delete fails, so it needs a `Raises:` section, while `process_review` logs `review_processing_failed`, sets the review status to `failed`, and returns without raising, so it does not.",
+    "title": "Add `Args:`/`Returns:`/`Raises:` sections to the public function docstrings in `core/services/`",
+    "body": "The docstrings on the eight public functions in `core/services/` don't have `Args:`, `Returns:` or `Raises:` sections. Add the ones that apply, matching the code: `delete_profile` re-raises after a rollback, while `process_review` sets the review to `failed` and returns.",
     "labels": [
       "tier-2",
       "docs"
@@ -871,7 +871,7 @@
   {
     "id": "I-03",
     "title": "Skill extractor fails to detect JavaScript and TypeScript",
-    "body": "`_detect_languages` in `ingestion/parsers/skill_extractor.py` looks for `.js` and `.ts` only in the `filename` argument (lines 175 and 177), and line 186 also picks `TypeScript` over `JavaScript` from the filename alone, so `TypeScript` is never reported when no filename is passed. The block reads just two signals from `text`: `re.search(r\"\\b(import|require)\\s+\", text)` on line 179 and the literal `package.json` on line 181. Text that describes JavaScript or TypeScript work in any other way produces no `JavaScript` or `TypeScript` language entry. `extract_skills('Wrote index.js using const arrow functions and async/await callbacks')` returns an empty list, and `extract_skills('Built app.tsx and types.ts with strict TypeScript interfaces')` returns only `React`, which comes from the `.tsx` entry in `REACT_INDICATORS` on line 55. Make the block read these signals from `text` as well: file names the text mentions, the keywords already listed in `JS_TS_KEYWORDS`, and the words JavaScript and TypeScript.\n\n`_detect_tools` and `_detect_databases` have the same problem: each one matches a technology only when its own name appears in the text (`if tool in text_lower` on line 268, `if db in text_lower` on line 253). Dockerfile directives, a Compose file, and `import psycopg2` never contain the words `docker` or `postgresql`, so `test_devops_tool_detection` gets `['Python']`, `test_docker_compose_detection` gets `[]`, and `test_database_technology_detection` gets `['Python', 'JavaScript']`, where that `JavaScript` entry comes from `import psycopg2` matching the line 179 regex. Add signals for those patterns too, such as the `FROM`/`RUN`/`EXPOSE` directives and a `services:` block for Docker, and the `psycopg2` driver name for PostgreSQL.\n\nFive tests in `tests/unit/test_skill_extractor.py` are marked `@pytest.mark.xfail(strict=True)` against this issue and should pass once all three detectors read the text: `test_javascript_detection`, `test_text_with_typescript_files`, `test_devops_tool_detection`, `test_docker_compose_detection` and `test_database_technology_detection`. Remove the markers as part of the fix.\n\n**Steps to reproduce:** `pytest tests/unit/test_skill_extractor.py -q` — observed: the five tests above fail their assertions and report as `xfailed`, with `test_javascript_detection` getting `[]` and `test_text_with_typescript_files` getting `['Python']` where each expects a JavaScript or TypeScript entry.",
+    "body": "The JavaScript and TypeScript checks in `_detect_languages` (`ingestion/parsers/skill_extractor.py`) read `.js` and `.ts` from the `filename` argument only, plus an `import`/`require` pattern and `package.json` from the text. JavaScript or TypeScript described any other way doesn't get a language entry. `_detect_tools` and `_detect_databases` match a technology only when its own name appears in the text.\n\n**Steps to reproduce:** `pytest tests/unit/test_skill_extractor.py -q` — `test_javascript_detection`, `test_text_with_typescript_files`, `test_devops_tool_detection`, `test_docker_compose_detection` and `test_database_technology_detection` fail their assertions and report as `xfailed`.",
     "labels": [
       "tier-1",
       "ingestion",
@@ -986,7 +986,7 @@
   {
     "id": "I-10",
     "title": "Health check references `settings.redis_host`, which does not exist on Settings",
-    "body": "The Redis probe in `api/routes/health.py` builds its client from `settings.redis_host` and `settings.redis_port` (lines 47 and 48). `Settings` in `core/config.py` defines neither field; it carries a single `redis_url` (line 14), which is also the only Redis variable in `.env.example`. The resulting `AttributeError` is raised inside the probe's `try` block and caught by the `except Exception` on line 55, so the caller never sees that error. Instead the handler logs `redis_health_check_failed`, sets `dependencies.redis` and the top-level `status` to `\"unhealthy\"`, and then raises `HTTPException` with status 503 on lines 86-89, carrying the whole health dict as the detail. Redis reports as down on every call, even when it is reachable.\n\nPoint the probe at `settings.redis_url`, which `redis.Redis.from_url()` accepts directly. Both lines need the change: fixing only `redis_host` leaves the same failure one line later at `redis_port`.\n\n**Steps to reproduce:** start the stack with Redis running and call `GET /health` — observed: a 503 whose body reports `\"redis\": \"unhealthy\"`, with `redis_health_check_failed` and an `AttributeError` for `redis_host` in the log; `grep redis_host core/config.py` confirms the field is absent from `Settings`.",
+    "body": "The Redis probe in `api/routes/health.py` builds its client from `settings.redis_host` and `settings.redis_port`. `Settings` in `core/config.py` doesn't define either field; it carries a single `redis_url`, which the probe should use instead. The probe's `except Exception` catches the resulting `AttributeError`, so the health check reports Redis as down even when it is reachable.\n\n**Steps to reproduce:** call `GET /health` with Redis running and observe a 503 whose body reports `\"redis\": \"unhealthy\"`, with `redis_health_check_failed` and an `AttributeError` for `redis_host` in the log.",
     "labels": [
       "tier-1",
       "good first issue",
@@ -1081,7 +1081,7 @@
   {
     "id": "H-01",
     "title": "Keyword search raises `ZeroDivisionError` when the index is empty",
-    "body": "`KeywordSearcher.index()` builds the BM25 index at `rag/retriever/keyword_search.py:25` by passing the tokenized corpus to `BM25Okapi`. When the chunk list is empty the corpus is empty too, and rank-bm25 divides the total token count by the number of documents to get the average document length, so `index([])` raises `ZeroDivisionError`. `search()` already handles the empty case with the guard at `rag/retriever/keyword_search.py:38` and returns an empty list, so `index()` should accept an empty corpus without raising and a search after it should return an empty list.\n\nThe covering test, `test_empty_index` in `tests/unit/test_keyword_search.py`, calls `searcher.index([])` before it searches. It is marked `@pytest.mark.xfail` referencing manifest id H-01 — remove the marker as part of the fix.",
+    "body": "`KeywordSearcher.index()` passes its tokenized corpus to `BM25Okapi`, so `index([])` raises `ZeroDivisionError` inside the rank-bm25 library. `search()` handles the empty case and returns an empty list, and `index()` shouldn't raise on an empty corpus either.\n\nThe covering test is marked `@pytest.mark.xfail` referencing manifest id H-01 — remove the marker as part of the fix.",
     "labels": [
       "tier-1",
       "good first issue",
@@ -1115,7 +1115,7 @@
   {
     "id": "H-03",
     "title": "README parser test fixture is indented, so it contains no headings",
-    "body": "`test_parse_standard_readme` in `tests/unit/test_readme_parser.py` parses the `sample_readme_text` fixture at `tests/conftest.py:26` and asserts `result.metadata[\"heading_count\"] > 0`. Every line of that fixture that has text on it is indented by four spaces, and four-space indented text in Markdown is a code block rather than a heading, so `_extract_heading_hierarchy` finds nothing, the heading count is `0`, and the test fails against correct parser behavior. The parser is right: its heading pattern at `ingestion/parsers/readme_parser.py:55` matches the `#` and `##` headings in this repository's own `README.md`. Fix the fixture so its lines are not indented; without the indentation it contains three headings and the test passes.\n\nThe covering test is marked `@pytest.mark.xfail` referencing manifest id H-03 — remove the marker as part of the fix.",
+    "body": "`test_parse_standard_readme` asserts `heading_count > 0` for the `sample_readme_text` fixture, but every line of text in it is indented four spaces, so the parser finds no headings. The parser isn't wrong; the fixture shouldn't be indented.\n\nThe covering test is marked `@pytest.mark.xfail` referencing manifest id H-03 — remove the marker as part of the fix.",
     "labels": [
       "tier-2",
       "ingestion",
@@ -1132,7 +1132,7 @@
   {
     "id": "H-04",
     "title": "Heading hierarchy test fixture is indented, so it contains no headings",
-    "body": "`test_extract_heading_hierarchy` in `tests/unit/test_readme_parser.py` builds its markdown in a triple-quoted string whose lines are indented by eight spaces, then asserts that heading levels 1, 2 and 3 all appear. `_extract_heading_hierarchy` in `ingestion/parsers/readme_parser.py` matches `#` only at the start of a line, which is the correct rule: text indented by four or more spaces is a code block in Markdown, not a heading. The method therefore returns an empty list, and the test fails against correct parser behavior. This is the same fixture problem as issue #70 (manifest H-03). With the indentation removed, the same markdown gives four headings, at levels 1, 2, 3 and 2, which satisfies every assertion. Fix the fixture so its lines are not indented.\n\nThe covering test is marked `@pytest.mark.xfail` referencing manifest id H-04 — remove the marker as part of the fix.",
+    "body": "`test_extract_heading_hierarchy` builds its markdown from lines indented by eight spaces, which Markdown treats as a code block. `_extract_heading_hierarchy` doesn't find any headings there, so the test fails against correct parser behavior. Remove the indentation.\n\nThe covering test is marked `@pytest.mark.xfail` referencing manifest id H-04 — remove the marker as part of the fix.",
     "labels": [
       "tier-2",
       "ingestion",
@@ -1158,6 +1158,23 @@
     "files": [
       "core/security.py",
       "tests/unit/test_security.py"
+    ],
+    "effort": "1–2 hours",
+    "verified": "2026-09-16"
+  },
+  {
+    "id": "H-06",
+    "title": "README and `.env.example` disagree about which LLM API key to set",
+    "body": "`README.md` tells you to add `OPENROUTER_API_KEY` to `.env`, but `.env.example` doesn't list that variable, and its comment offers only `mock` and `openai` for `LLM_PROVIDER`. `core/config.py` defines both keys. Make the two files agree.",
+    "labels": [
+      "tier-1",
+      "good first issue",
+      "docs",
+      "bug"
+    ],
+    "files": [
+      "README.md",
+      ".env.example"
     ],
     "effort": "1–2 hours",
     "verified": "2026-09-16"

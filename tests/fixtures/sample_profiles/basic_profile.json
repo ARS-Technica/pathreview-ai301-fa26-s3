@@ -6,33 +6,35 @@
     {
       "name": "transit-delay-tracker",
       "description": "Predicts bus arrival delays from live GTFS feeds",
-      "primary_language": "Python",
-      "star_count": 34,
-      "fork_count": 6,
+      "language": "Python",
+      "stargazers_count": 34,
+      "forks_count": 6,
       "open_issues_count": 3,
-      "last_commit_date": "2026-07-28T16:04:11Z",
-      "has_readme": true,
+      "pushed_at": "2026-07-28T16:04:11Z",
+      "html_url": "https://github.com/priya-raman/transit-delay-tracker",
+      "homepage": "https://transit-delays.priya-raman.dev",
       "topics": [
         "gtfs",
         "forecasting",
         "fastapi"
       ],
-      "homepage": "https://transit-delays.priya-raman.dev"
+      "readme_content": "# transit-delay-tracker\n\nPredicts bus arrival delays from live GTFS feeds.\n\n## Setup\n\n    pip install -r requirements.txt\n\n## Usage\n\nRun the API with `uvicorn app:api`.\n"
     },
     {
       "name": "recipe-scaler",
       "description": "React app that rescales recipe quantities and converts units",
-      "primary_language": "TypeScript",
-      "star_count": 11,
-      "fork_count": 2,
+      "language": "TypeScript",
+      "stargazers_count": 11,
+      "forks_count": 2,
       "open_issues_count": 1,
-      "last_commit_date": "2026-05-02T09:21:40Z",
-      "has_readme": true,
+      "pushed_at": "2026-05-02T09:21:40Z",
+      "html_url": "https://github.com/priya-raman/recipe-scaler",
+      "homepage": "",
       "topics": [
         "react",
         "vite"
       ],
-      "homepage": ""
+      "readme_content": "# recipe-scaler\n\nRescales recipe quantities and converts between metric and imperial units.\n"
     }
   ]
 }
